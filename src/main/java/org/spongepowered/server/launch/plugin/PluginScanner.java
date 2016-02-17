@@ -24,15 +24,17 @@
  */
 package org.spongepowered.server.launch.plugin;
 
-import com.google.common.base.StandardSystemProperty;
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
+import org.apache.logging.log4j.Logger;
 import org.objectweb.asm.ClassReader;
-import org.objectweb.asm.Type;
-import org.objectweb.asm.tree.AnnotationNode;
-import org.objectweb.asm.tree.ClassNode;
-import org.spongepowered.api.plugin.Plugin;
+import org.spongepowered.plugin.meta.McModInfo;
+import org.spongepowered.plugin.meta.PluginMetadata;
 import org.spongepowered.server.launch.VanillaLaunch;
+import org.spongepowered.server.launch.plugin.asm.PluginClassVisitor;
+import org.spongepowered.server.launch.transformer.at.AccessTransformers;
 
+import java.io.BufferedInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
@@ -42,15 +44,22 @@ import java.net.URLClassLoader;
 import java.nio.file.DirectoryStream;
 import java.nio.file.FileVisitOption;
 import java.nio.file.FileVisitResult;
+import java.nio.file.FileVisitor;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.PathMatcher;
 import java.nio.file.Paths;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
-import java.util.Enumeration;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.jar.JarInputStream;
+import java.util.jar.Manifest;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
@@ -58,32 +67,38 @@ import javax.annotation.Nullable;
 
 final class PluginScanner {
 
-    private static final String PLUGIN_DESCRIPTOR = Type.getDescriptor(Plugin.class);
-
-    private static final String JAVA_HOME = StandardSystemProperty.JAVA_HOME.value();
-
     private static final String CLASS_EXTENSION = ".class";
+    private static final String JAR_EXTENSION = ".jar";
 
-    private static final PathMatcher CLASS_FILE = PathMatchers.create("glob:*" + CLASS_EXTENSION);
+    private static final PathMatcher CLASS_FILE = path -> path.toString().endsWith(CLASS_EXTENSION);
+    private static final PathMatcher JAR_FILE = path -> path.toString().endsWith(JAR_EXTENSION);
+    private static final DirectoryStream.Filter<Path> JAR_FILTER = path -> path.toString().endsWith(JAR_EXTENSION);
 
-    private static final PathMatcher ARCHIVE = PathMatchers.create("glob:*.{jar,zip}");
-    static final DirectoryStream.Filter<Path> ARCHIVE_FILTER = PathMatchers.createFilter(ARCHIVE);
+    private static final String METADATA_FILE = McModInfo.STANDARD_FILENAME;
 
-    private PluginScanner() {
+    private static final String JAVA_HOME = System.getProperty("java.home");
+    private static final Logger logger = VanillaLaunch.getLogger();
+
+    private final Map<String, PluginCandidate> plugins = new HashMap<>();
+    private final Set<String> pluginClasses = new HashSet<>();
+
+    @Nullable private FileVisitor<Path> classFileVisitor;
+
+    public ImmutableList<PluginCandidate> getPlugins() {
+        return ImmutableList.copyOf(this.plugins.values());
     }
 
-    static Set<String> scanClassPath(URLClassLoader loader) {
+    void scanClassPath(URLClassLoader loader) {
         Set<URI> sources = new HashSet<>();
-        Set<String> plugins = new HashSet<>();
 
         for (URL url : loader.getURLs()) {
             if (!url.getProtocol().equals("file")) {
-                VanillaLaunch.getLogger().warn("Skipping unsupported classpath source: {}", url);
+                logger.warn("Skipping unsupported classpath source: {}", url);
                 continue;
             }
 
             if (url.getPath().startsWith(JAVA_HOME)) {
-                VanillaLaunch.getLogger().trace("Skipping JRE classpath entry: {}", url);
+                logger.trace("Skipping JRE classpath entry: {}", url);
                 continue;
             }
 
@@ -91,108 +106,211 @@ final class PluginScanner {
             try {
                 source = url.toURI();
             } catch (URISyntaxException e) {
-                VanillaLaunch.getLogger().error("Failed to search for classpath plugins in {}", url);
+                logger.error("Failed to search for classpath plugins in {}", url);
                 continue;
             }
 
             if (sources.add(source)) {
-                scanPath(Paths.get(source), plugins);
-            }
-        }
-
-        VanillaLaunch.getLogger().trace("Found {} plugin(s): {}", plugins.size(), plugins);
-        return plugins;
-    }
-
-    private static void scanPath(Path path, Set<String> plugins) {
-        if (Files.exists(path)) {
-            if (Files.isDirectory(path)) {
-                scanDirectory(path, plugins);
-            } else {
-                scanZip(path, plugins);
+                Path path = Paths.get(source);
+                if (Files.exists(path)) {
+                    if (Files.isDirectory(path)) {
+                        scanClasspathDirectory(path);
+                    } else if (JAR_FILE.matches(path)) {
+                        scanJar(path, true);
+                    }
+                }
             }
         }
     }
 
-    private static void scanDirectory(Path dir, final Set<String> plugins) {
-        VanillaLaunch.getLogger().trace("Scanning {} for plugins", dir);
+    private void scanClasspathDirectory(Path dir) {
+        logger.trace("Scanning {} for plugins", dir);
+
+        if (this.classFileVisitor == null) {
+            this.classFileVisitor = new ClassFileVisitor();
+        }
 
         try {
-            Files.walkFileTree(dir, ImmutableSet.of(FileVisitOption.FOLLOW_LINKS), Integer.MAX_VALUE, new SimpleFileVisitor<Path>() {
+            Files.walkFileTree(dir, ImmutableSet.of(FileVisitOption.FOLLOW_LINKS), Integer.MAX_VALUE, this.classFileVisitor);
+        } catch (IOException e) {
+            logger.error("Failed to search for plugins in {}", dir, e);
+        }
+    }
 
-                @Override
-                public FileVisitResult visitFile(Path path, BasicFileAttributes attrs) throws IOException {
-                    if (CLASS_FILE.matches(path.getFileName())) {
-                        try (InputStream in = Files.newInputStream(path)) {
-                            String plugin = findPlugin(in);
-                            if (plugin != null) {
-                                plugins.add(plugin);
-                            }
+    void visitClasspathFile(Path path) {
+        if (CLASS_FILE.matches(path)) {
+            try (InputStream in = Files.newInputStream(path)) {
+                PluginCandidate candidate = scanClassFile(in, null);
+                if (candidate != null) {
+                    addCandidate(candidate);
+                }
+            } catch (IOException e) {
+                logger.error("Failed to search for plugins in {}", path, e);
+            }
+        }
+    }
+
+    private final class ClassFileVisitor extends SimpleFileVisitor<Path> {
+
+        @Override
+        public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
+            visitClasspathFile(file);
+            return FileVisitResult.CONTINUE;
+        }
+
+    }
+
+    void scanDirectory(Path path) {
+        try (DirectoryStream<Path> dir = Files.newDirectoryStream(path, JAR_FILTER)) {
+            for (Path jar : dir) {
+                scanJar(jar, false);
+            }
+        } catch (IOException e) {
+            logger.error("Failed to search for plugins in {}", path, e);
+        }
+    }
+
+    void scanJar(Path path, boolean classpath) {
+        logger.trace("Scanning {} for plugins", path);
+
+        Set<String> annotationProcessors = Collections.emptySet();
+        List<PluginCandidate> candidates = new ArrayList<>();
+        List<PluginMetadata> metadata = null;
+
+        // Open the zip file so we can scan it for plugins
+        try (JarInputStream jar = new JarInputStream(new BufferedInputStream(Files.newInputStream(path)))) {
+            ZipEntry entry = jar.getNextEntry();
+            if (entry == null) {
+                return;
+            }
+
+            Manifest manifest = jar.getManifest();
+            if (manifest != null) {
+                annotationProcessors = PluginAccessTransformers.find(manifest);
+            } else if (!classpath) {
+                logger.warn("Missing JAR manifest in {}", path); // TODO
+            }
+
+            do {
+                if (entry.isDirectory()) {
+                    continue;
+                }
+
+                final String name = entry.getName();
+
+                if (!name.endsWith(CLASS_EXTENSION)) {
+                    if (name.equals(METADATA_FILE)) {
+                        try {
+                            metadata = McModInfo.DEFAULT.read(jar);
+                        } catch (IOException e) {
+                            logger.error("Failed to read plugin metadata from " + METADATA_FILE + " in {}", path, e);
+                            return;
+                        }
+                    } else if (annotationProcessors.remove(name)) {
+                        try {
+                            AccessTransformers.register(jar);
+                        } catch (IOException e) {
+                            logger.warn("Failed to read access transformer from: {}!{}", path, name, e);
                         }
                     }
 
-                    return FileVisitResult.CONTINUE;
+                    continue;
                 }
-            });
-        } catch (IOException e) {
-            VanillaLaunch.getLogger().error("Failed to search for plugins in {}", dir, e);
-        }
-    }
 
-    private static void scanZip(Path path, Set<String> plugins) {
-        if (!ARCHIVE.matches(path.getFileName())) {
+                PluginCandidate candidate = scanClassFile(jar, path);
+                if (candidate != null) {
+                    candidates.add(candidate);
+                }
+            } while ((entry = jar.getNextEntry()) != null);
+        } catch (IOException e) {
+            logger.error("Failed to scan plugin JAR: {}", path, e);
             return;
         }
 
-        // Open the zip file so we can scan for plugins
-        try (ZipFile zip = new ZipFile(path.toFile())) {
-            scanZip(path, zip, plugins);
-        } catch (IOException e) {
-            VanillaLaunch.getLogger().error("Failed to scan plugin JAR: {}", path, e);
-        }
-    }
-
-    static Set<String> scanZip(Path path, ZipFile zip) throws IOException {
-        Set<String> plugins = new HashSet<>();
-        scanZip(path, zip, plugins);
-        VanillaLaunch.getLogger().trace("Found {} plugin(s) in {}: {}", plugins.size(), path, plugins);
-        return plugins;
-    }
-
-    static void scanZip(Path path, ZipFile zip, Set<String> plugins) throws IOException {
-        VanillaLaunch.getLogger().trace("Scanning {} for plugins", path);
-
-        Enumeration<? extends ZipEntry> entries = zip.entries();
-        while (entries.hasMoreElements()) {
-            ZipEntry entry = entries.nextElement();
-            if (entry.isDirectory() || !entry.getName().endsWith(CLASS_EXTENSION)) {
-                continue;
-            }
-
-            try (InputStream in = zip.getInputStream(entry)) {
-                String plugin = findPlugin(in);
-                if (plugin != null) {
-                    plugins.add(plugin);
+        // There are some annotation processors left we haven't read yet
+        if (!annotationProcessors.isEmpty()) {
+            try (ZipFile zip = new ZipFile(path.toFile())) {
+                for (String ap : annotationProcessors) {
+                    ZipEntry entry = zip.getEntry(ap);
+                    if (entry != null) {
+                        try (InputStream in = zip.getInputStream(entry)) {
+                            AccessTransformers.register(in);
+                        } catch (IOException e) {
+                            logger.warn("Failed to read access transformer from: {}!{}", path, entry.getName(), e);
+                        }
+                    } else {
+                        logger.warn("Found non-existent access transformer in plugin manifest: {}!{}", path, ap);
+                    }
                 }
+            } catch (IOException e) {
+                logger.warn("Failed to read access transformers from {}", path, e);
+            }
+        }
+
+        if (!candidates.isEmpty()) {
+            for (PluginCandidate candidate : candidates) {
+                if (!addCandidate(candidate)) {
+                    continue;
+                }
+
+                // Find matching plugin metadata
+                if (metadata != null) {
+                    for (PluginMetadata meta : metadata) {
+                        if (candidate.getId().equals(meta.getId())) {
+                            candidate.setMetadata(meta);
+                            break;
+                        }
+                    }
+
+                    logger.warn("No matching file metadata found for plugin {} from {}", candidate.getId(), path);
+                }
+
+                // TODO: Warn about unused metadata
             }
         }
     }
 
-    @Nullable
-    private static String findPlugin(InputStream in) throws IOException {
+    private boolean addCandidate(PluginCandidate candidate) {
+        final String pluginClass = candidate.getPluginClass();
+        final String id = candidate.getId();
+
+        // TODO: Validate ID
+
+        if (this.pluginClasses.add(pluginClass)) {
+            if (this.plugins.containsKey(id)) {
+                logger.warn("Skipping plugin with duplicate plugin id '{}' ({} from {})", id, pluginClass, candidate.getSource());
+                return false;
+            }
+
+            this.plugins.put(id, candidate);
+            return true;
+        } else {
+            logger.warn("Skipping duplicate plugin class {} from {}", pluginClass, candidate.getSource());
+        }
+
+        return false;
+    }
+
+    private PluginCandidate scanClassFile(InputStream in, @Nullable Path source) throws IOException {
         ClassReader reader = new ClassReader(in);
-        ClassNode classNode = new ClassNode();
-        reader.accept(classNode, ClassReader.SKIP_CODE | ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
+        PluginClassVisitor visitor = new PluginClassVisitor();
 
-        if (classNode.visibleAnnotations != null) {
-            for (AnnotationNode node : classNode.visibleAnnotations) {
-                if (node.desc.equals(PLUGIN_DESCRIPTOR)) {
-                    return classNode.name.replace('/', '.');
-                }
+        try {
+            reader.accept(visitor, ClassReader.SKIP_CODE | ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
+
+            PluginMetadata metadata = visitor.getMetadata();
+            if (metadata == null) {
+                return null; // Not a plugin class
             }
+
+            return new PluginCandidate(visitor.getClassName().replace('/', '.'), source, metadata);
+        } catch (InvalidPluginException e) {
+            logger.warn("Skipping invalid plugin {} from {}: {}", visitor.getClassName(), source, e.getMessage());
         }
 
         return null;
     }
+
+
 
 }

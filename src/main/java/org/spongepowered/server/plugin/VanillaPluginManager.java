@@ -26,19 +26,19 @@ package org.spongepowered.server.plugin;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 
-import com.google.common.base.Throwables;
 import com.google.common.collect.Maps;
 import com.google.inject.Singleton;
 import net.minecraft.launchwrapper.Launch;
-import org.slf4j.Logger;
+import org.spongepowered.api.Sponge;
 import org.spongepowered.api.plugin.PluginContainer;
 import org.spongepowered.api.plugin.PluginManager;
 import org.spongepowered.common.SpongeImpl;
+import org.spongepowered.plugin.meta.PluginMetadata;
+import org.spongepowered.server.launch.plugin.PluginCandidate;
 import org.spongepowered.server.launch.plugin.VanillaLaunchPluginManager;
 
 import java.io.IOException;
 import java.net.MalformedURLException;
-import java.nio.file.Path;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Map;
@@ -60,30 +60,45 @@ public class VanillaPluginManager implements PluginManager {
             registerPlugin(container);
         }
 
-        VanillaLaunchPluginManager.getPlugins().asMap().forEach(this::loadPlugins);
+        // TODO: Dependencies
+
+        for (PluginCandidate candidate : VanillaLaunchPluginManager.getPlugins()) {
+            loadPlugin(candidate);
+        }
     }
 
-    private void loadPlugins(Object source, Iterable<String> plugins) {
-        if (source instanceof Path) {
+    private void loadPlugin(PluginCandidate candidate) {
+        final String id = candidate.getId();
+
+        if (candidate.getSource().isPresent()) {
             try {
                 // Add JAR to classpath
-                Launch.classLoader.addURL(((Path) source).toUri().toURL());
+                Launch.classLoader.addURL(candidate.getSource().get().toUri().toURL());
             } catch (MalformedURLException e) {
-                throw Throwables.propagate(e);
+                throw new RuntimeException("Failed to add plugin '" + id + "' to classpath", e);
             }
         }
 
-        for (String plugin : plugins) {
-            try {
-                Class<?> pluginClass = Class.forName(plugin);
-                VanillaPluginContainer container = new VanillaPluginContainer(source, pluginClass);
-                registerPlugin(container);
-                SpongeImpl.getGame().getEventManager().registerListeners(container, container.getInstance().get());
+        Object source = candidate.getSource().orElse(null);
+        if (source == null) {
+            source = "classpath";
+        }
 
-                SpongeImpl.getLogger().info("Loaded plugin: {} {} (from {})", container.getName(), container.getVersion(), source);
-            } catch (Throwable e) {
-                SpongeImpl.getLogger().error("Failed to load plugin: {} (from {})", plugin, source, e);
-            }
+        final PluginMetadata metadata = candidate.getMetadata();
+        final String name = metadata.getName() != null ? metadata.getName() : id;
+
+        try {
+            Class<?> pluginClass = Class.forName(candidate.getPluginClass());
+            PluginContainer container = new VanillaPluginContainer(id, pluginClass,
+                    metadata.getName(), metadata.getVersion(), metadata.getDescription(), metadata.getUrl(), metadata.getAuthors(),
+                    candidate.getSource());
+
+            registerPlugin(container);
+            Sponge.getEventManager().registerListeners(container, container.getInstance().get());
+
+            SpongeImpl.getLogger().info("Loaded plugin: {} {} (from {})", name, container.getVersion().orElse("unknown"), source);
+        } catch (Throwable e) {
+            SpongeImpl.getLogger().error("Failed to load plugin: {} (from {})", name, source, e);
         }
     }
 
@@ -101,11 +116,6 @@ public class VanillaPluginManager implements PluginManager {
     @Override
     public Optional<PluginContainer> getPlugin(String id) {
         return Optional.ofNullable(this.plugins.get(id));
-    }
-
-    @Override
-    public Logger getLogger(PluginContainer plugin) {
-        return plugin.getLogger();
     }
 
     @Override

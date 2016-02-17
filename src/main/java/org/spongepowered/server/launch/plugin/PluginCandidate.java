@@ -24,22 +24,48 @@
  */
 package org.spongepowered.server.launch.plugin;
 
-import java.nio.file.DirectoryStream;
-import java.nio.file.FileSystems;
+import static com.google.common.base.Preconditions.checkNotNull;
+
+import org.spongepowered.plugin.meta.PluginMetadata;
+
 import java.nio.file.Path;
-import java.nio.file.PathMatcher;
+import java.util.Optional;
 
-final class PathMatchers {
+import javax.annotation.Nullable;
 
-    private PathMatchers() {
+public final class PluginCandidate {
+
+    private final String id;
+    private final String pluginClass;
+    private final Optional<Path> source;
+
+    private PluginMetadata metadata;
+
+    PluginCandidate(String pluginClass, @Nullable Path source, PluginMetadata metadata) {
+        this.pluginClass = checkNotNull(pluginClass, "pluginClass");
+        this.source = Optional.ofNullable(source);
+        this.metadata = checkNotNull(metadata, "metadata");
+        this.id = metadata.getId();
     }
 
-    static PathMatcher create(String pattern) {
-        return FileSystems.getDefault().getPathMatcher(pattern);
+    public String getId() {
+        return this.id;
     }
 
-    static DirectoryStream.Filter<Path> createFilter(final PathMatcher matcher) {
-        return entry -> matcher.matches(entry.getFileName());
+    public String getPluginClass() {
+        return this.pluginClass;
+    }
+
+    public Optional<Path> getSource() {
+        return this.source;
+    }
+
+    public PluginMetadata getMetadata() {
+        return this.metadata;
+    }
+
+    void setMetadata(PluginMetadata metadata) {
+        this.metadata = checkNotNull(metadata, "metadata");
     }
 
 }

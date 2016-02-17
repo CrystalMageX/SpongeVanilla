@@ -22,48 +22,23 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-package org.spongepowered.server.plugin;
+package org.spongepowered.server.launch.plugin;
 
-import static org.spongepowered.common.SpongeImpl.GAME_ID;
-import static org.spongepowered.common.SpongeImpl.GAME_NAME;
+public final class InvalidPluginException extends RuntimeException {
 
-import com.google.inject.Singleton;
-import net.minecraft.server.MinecraftServer;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.spongepowered.common.plugin.BasePluginContainer;
-
-import java.util.Optional;
-
-@Singleton
-public final class MinecraftPluginContainer extends BasePluginContainer {
-
-    MinecraftPluginContainer() {
+    public InvalidPluginException() {
     }
 
-    @Override
-    public String getId() {
-        return GAME_ID;
+    public InvalidPluginException(String message) {
+        super(message);
     }
 
-    @Override
-    public String getName() {
-        return GAME_NAME;
+    public InvalidPluginException(String message, Throwable cause) {
+        super(message, cause);
     }
 
-    @Override
-    public Optional<String> getVersion() {
-        return Optional.of(MinecraftServer.getServer().getMinecraftVersion());
-    }
-
-    @Override
-    public Logger getLogger() {
-        return LoggerFactory.getLogger(MinecraftServer.class);
-    }
-
-    @Override
-    public Optional<Object> getInstance() {
-        return Optional.ofNullable(MinecraftServer.getServer());
+    public InvalidPluginException(Throwable cause) {
+        super(cause);
     }
 
 }

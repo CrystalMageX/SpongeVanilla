@@ -25,15 +25,11 @@
 package org.spongepowered.server.launch.plugin;
 
 import com.google.common.base.Splitter;
-import org.spongepowered.server.launch.VanillaLaunch;
-import org.spongepowered.server.launch.transformer.at.AccessTransformers;
 
-import java.io.IOException;
-import java.io.InputStream;
-import java.nio.file.Path;
-import java.util.jar.JarFile;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.jar.Manifest;
-import java.util.zip.ZipEntry;
 
 public final class PluginAccessTransformers {
 
@@ -44,31 +40,18 @@ public final class PluginAccessTransformers {
     private PluginAccessTransformers() {
     }
 
-    public static void register(Path path, JarFile jar) throws IOException {
-        Manifest manifest = jar.getManifest();
-        if (manifest == null) {
-            return;
-        }
-
+    public static Set<String> find(Manifest manifest) {
         String ats = manifest.getMainAttributes().getValue(KEY);
         if (ats == null) {
-            return;
+            return Collections.emptySet();
         }
 
+        Set<String> result = new HashSet<>();
         for (String at : VALUE_SPLITTER.split(ats)) {
-            String location = LOCATION + at;
-            ZipEntry entry = jar.getEntry(location);
-            if (entry != null) {
-                VanillaLaunch.getLogger().debug("Applying access transformer from {}!{}", path, location);
-                try (InputStream in = jar.getInputStream(entry)) {
-                    AccessTransformers.register(in);
-                } catch (IOException e) {
-                    VanillaLaunch.getLogger().warn("Failed to read access transformer from: {}!{}", path, location, e);
-                }
-            } else {
-                VanillaLaunch.getLogger().warn("Found non-existent access transformer in plugin manifest: {}!{}", path, location);
-            }
+            result.add(LOCATION + at);
         }
+
+        return result;
     }
 
 }

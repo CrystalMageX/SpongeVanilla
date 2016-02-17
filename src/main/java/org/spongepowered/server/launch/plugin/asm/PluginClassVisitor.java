@@ -22,48 +22,47 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-package org.spongepowered.server.plugin;
+package org.spongepowered.server.launch.plugin.asm;
 
-import static org.spongepowered.common.SpongeImpl.GAME_ID;
-import static org.spongepowered.common.SpongeImpl.GAME_NAME;
+import static org.objectweb.asm.Opcodes.ASM5;
 
-import com.google.inject.Singleton;
-import net.minecraft.server.MinecraftServer;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.spongepowered.common.plugin.BasePluginContainer;
+import org.objectweb.asm.AnnotationVisitor;
+import org.objectweb.asm.ClassVisitor;
+import org.spongepowered.plugin.meta.PluginMetadata;
 
-import java.util.Optional;
+import javax.annotation.Nullable;
 
-@Singleton
-public final class MinecraftPluginContainer extends BasePluginContainer {
+public final class PluginClassVisitor extends ClassVisitor {
 
-    MinecraftPluginContainer() {
+    private static final String PLUGIN_DESCRIPTOR = "Lorg/spongepowered/api/plugin/Plugin;";
+
+    private String className;
+    private PluginAnnotationVisitor annotationVisitor;
+
+    public PluginClassVisitor() {
+        super(ASM5);
+    }
+
+    public String getClassName() {
+        return this.className;
+    }
+
+    public PluginMetadata getMetadata() {
+        return this.annotationVisitor != null ? this.annotationVisitor.getMetadata() : null;
     }
 
     @Override
-    public String getId() {
-        return GAME_ID;
+    public void visit(int version, int access, String name, String signature, String superName, String[] interfaces) {
+        this.className = name;
     }
 
-    @Override
-    public String getName() {
-        return GAME_NAME;
-    }
+    @Override @Nullable
+    public AnnotationVisitor visitAnnotation(String desc, boolean visible) {
+        if (visible && desc.equals(PLUGIN_DESCRIPTOR)) {
+            return this.annotationVisitor = new PluginAnnotationVisitor(className);
+        }
 
-    @Override
-    public Optional<String> getVersion() {
-        return Optional.of(MinecraftServer.getServer().getMinecraftVersion());
-    }
-
-    @Override
-    public Logger getLogger() {
-        return LoggerFactory.getLogger(MinecraftServer.class);
-    }
-
-    @Override
-    public Optional<Object> getInstance() {
-        return Optional.ofNullable(MinecraftServer.getServer());
+        return null;
     }
 
 }
