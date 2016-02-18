@@ -30,7 +30,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.spongepowered.common.SpongeImpl;
 import org.spongepowered.common.guice.SpongePluginGuiceModule;
-import org.spongepowered.common.plugin.BasePluginContainer;
+import org.spongepowered.common.plugin.AbstractPluginContainer;
 import org.spongepowered.common.plugin.PluginContainerExtension;
 
 import java.nio.file.Path;
@@ -39,7 +39,7 @@ import java.util.Optional;
 
 import javax.annotation.Nullable;
 
-public final class VanillaPluginContainer extends BasePluginContainer implements PluginContainerExtension {
+public final class VanillaPluginContainer extends AbstractPluginContainer implements PluginContainerExtension {
 
     private final String id;
     private final Optional<String> name;

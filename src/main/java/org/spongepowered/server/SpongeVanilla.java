@@ -60,7 +60,7 @@ import org.spongepowered.common.SpongeInternalListeners;
 import org.spongepowered.common.entity.ai.SpongeEntityAICommonSuperclass;
 import org.spongepowered.common.interfaces.IMixinServerCommandManager;
 import org.spongepowered.common.network.message.SpongeMessageHandler;
-import org.spongepowered.common.plugin.BasePluginContainer;
+import org.spongepowered.common.plugin.AbstractPluginContainer;
 import org.spongepowered.common.registry.RegistryHelper;
 import org.spongepowered.common.service.permission.SpongeContextCalculator;
 import org.spongepowered.common.service.permission.SpongePermissionService;
@@ -75,7 +75,7 @@ import java.io.File;
 import java.io.IOException;
 import java.util.Optional;
 
-public final class SpongeVanilla extends BasePluginContainer {
+public final class SpongeVanilla extends AbstractPluginContainer {
 
     public static final SpongeVanilla INSTANCE = new SpongeVanilla();
 

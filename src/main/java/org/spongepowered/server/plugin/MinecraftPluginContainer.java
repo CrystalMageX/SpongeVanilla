@@ -31,12 +31,12 @@ import com.google.inject.Singleton;
 import net.minecraft.server.MinecraftServer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.spongepowered.common.plugin.BasePluginContainer;
+import org.spongepowered.common.plugin.AbstractPluginContainer;
 
 import java.util.Optional;
 
 @Singleton
-public final class MinecraftPluginContainer extends BasePluginContainer {
+public final class MinecraftPluginContainer extends AbstractPluginContainer {
 
     MinecraftPluginContainer() {
     }
