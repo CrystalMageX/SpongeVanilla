@@ -57,6 +57,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.jar.JarFile;
 import java.util.jar.JarInputStream;
 import java.util.jar.Manifest;
 import java.util.zip.ZipEntry;
@@ -183,6 +184,14 @@ final class PluginScanner {
             }
 
             Manifest manifest = jar.getManifest();
+            if (manifest == null) {
+                // JarInputStream seems to be only able to find the manifest if it's one of the first entries...
+                // Try harder to find it anyway - Wtf Java?
+                try (JarFile jarFile = new JarFile(path.toFile())) {
+                    manifest = jarFile.getManifest();
+                }
+            }
+
             if (manifest != null) {
                 annotationProcessors = PluginAccessTransformers.find(manifest);
             } else if (!classpath) {
