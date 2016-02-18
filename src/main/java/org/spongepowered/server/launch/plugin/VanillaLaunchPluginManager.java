@@ -26,7 +26,6 @@ package org.spongepowered.server.launch.plugin;
 
 import static com.google.common.base.Preconditions.checkState;
 
-import com.google.common.collect.ImmutableList;
 import org.spongepowered.common.launch.SpongeLaunch;
 import org.spongepowered.server.launch.VanillaLaunch;
 
@@ -34,6 +33,7 @@ import java.io.IOException;
 import java.net.URLClassLoader;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Map;
 
 import javax.annotation.Nullable;
 
@@ -43,7 +43,7 @@ public final class VanillaLaunchPluginManager {
     }
 
     @Nullable
-    private static ImmutableList<PluginCandidate> plugins;
+    private static Map<String, PluginCandidate> plugins;
 
     public static void findPlugins(boolean scanClasspath) throws IOException {
         VanillaLaunch.getLogger().info("Searching for plugins...");
@@ -73,9 +73,9 @@ public final class VanillaLaunchPluginManager {
         VanillaLaunch.getLogger().info("{} plugin(s) found", plugins.size());
     }
 
-    public static ImmutableList<PluginCandidate> getPlugins() {
+    public static Map<String, PluginCandidate> getPlugins() {
         checkState(plugins != null, "Plugin folder was not scanned yet");
-        ImmutableList<PluginCandidate> result = plugins;
+        Map<String, PluginCandidate> result = plugins;
         plugins = null;
         return result;
     }

@@ -26,7 +26,6 @@ package org.spongepowered.server.plugin;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 
-import com.google.common.collect.Maps;
 import com.google.inject.Singleton;
 import net.minecraft.launchwrapper.Launch;
 import org.spongepowered.api.Sponge;
@@ -34,21 +33,29 @@ import org.spongepowered.api.plugin.PluginContainer;
 import org.spongepowered.api.plugin.PluginManager;
 import org.spongepowered.common.SpongeImpl;
 import org.spongepowered.plugin.meta.PluginMetadata;
+import org.spongepowered.server.launch.VanillaLaunch;
 import org.spongepowered.server.launch.plugin.PluginCandidate;
 import org.spongepowered.server.launch.plugin.VanillaLaunchPluginManager;
 
 import java.io.IOException;
 import java.net.MalformedURLException;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.IdentityHashMap;
+import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 @Singleton
 public class VanillaPluginManager implements PluginManager {
 
-    private final Map<String, PluginContainer> plugins = Maps.newHashMap();
-    private final Map<Object, PluginContainer> pluginInstances = Maps.newIdentityHashMap();
+    private final Map<String, PluginContainer> plugins = new HashMap<>();
+    private final Map<Object, PluginContainer> pluginInstances = new IdentityHashMap<>();
 
     private void registerPlugin(PluginContainer plugin) {
         this.plugins.put(plugin.getId(), plugin);
@@ -60,11 +67,56 @@ public class VanillaPluginManager implements PluginManager {
             registerPlugin(container);
         }
 
-        // TODO: Dependencies
-
-        for (PluginCandidate candidate : VanillaLaunchPluginManager.getPlugins()) {
+        Set<PluginCandidate> candidates = checkRequirements(VanillaLaunchPluginManager.getPlugins());
+        for (PluginCandidate candidate : candidates) {
             loadPlugin(candidate);
         }
+    }
+
+    private Set<PluginCandidate> checkRequirements(Map<String, PluginCandidate> candidates) {
+        Set<PluginCandidate> successfulCandidates = new HashSet<>(candidates.size());
+        List<PluginCandidate> failedCandidates = new ArrayList<>();
+
+        for (PluginCandidate candidate : candidates.values()) {
+            if (candidate.collectRequirements(this.plugins.keySet(), candidates)) {
+                successfulCandidates.add(candidate);
+            } else {
+                failedCandidates.add(candidate);
+            }
+        }
+
+        if (failedCandidates.isEmpty()) {
+            return successfulCandidates; // Nothing to do, all requirements satisfied
+        }
+
+        PluginCandidate candidate;
+        boolean updated;
+        while (true) {
+            updated = false;
+            Iterator<PluginCandidate> itr = successfulCandidates.iterator();
+            while (itr.hasNext()) {
+                candidate = itr.next();
+                if (candidate.updateRequirements()) {
+                    updated = true;
+                    itr.remove();
+                    failedCandidates.add(candidate);
+                }
+            }
+
+            if (updated) {
+                // Update failed candidates as well
+                failedCandidates.forEach(PluginCandidate::updateRequirements);
+            } else {
+                break;
+            }
+        }
+
+        for (PluginCandidate failed : failedCandidates) {
+            VanillaLaunch.getLogger().error("Cannot load plugin '{}' because it is missing the required dependencies {}",
+                    failed.getId(), failed.getMissingRequirements());
+        }
+
+        return successfulCandidates;
     }
 
     private void loadPlugin(PluginCandidate candidate) {

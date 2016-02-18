@@ -24,7 +24,6 @@
  */
 package org.spongepowered.server.launch.plugin;
 
-import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import org.apache.logging.log4j.Logger;
 import org.objectweb.asm.ClassReader;
@@ -61,7 +60,6 @@ import java.util.Set;
 import java.util.jar.JarInputStream;
 import java.util.jar.Manifest;
 import java.util.zip.ZipEntry;
-import java.util.zip.ZipFile;
 
 import javax.annotation.Nullable;
 
@@ -84,8 +82,8 @@ final class PluginScanner {
 
     @Nullable private FileVisitor<Path> classFileVisitor;
 
-    public ImmutableList<PluginCandidate> getPlugins() {
-        return ImmutableList.copyOf(this.plugins.values());
+    public Map<String, PluginCandidate> getPlugins() {
+        return this.plugins;
     }
 
     void scanClassPath(URLClassLoader loader) {
@@ -229,22 +227,7 @@ final class PluginScanner {
 
         // There are some annotation processors left we haven't read yet
         if (!annotationProcessors.isEmpty()) {
-            try (ZipFile zip = new ZipFile(path.toFile())) {
-                for (String ap : annotationProcessors) {
-                    ZipEntry entry = zip.getEntry(ap);
-                    if (entry != null) {
-                        try (InputStream in = zip.getInputStream(entry)) {
-                            AccessTransformers.register(in);
-                        } catch (IOException e) {
-                            logger.warn("Failed to read access transformer from: {}!{}", path, entry.getName(), e);
-                        }
-                    } else {
-                        logger.warn("Found non-existent access transformer in plugin manifest: {}!{}", path, ap);
-                    }
-                }
-            } catch (IOException e) {
-                logger.warn("Failed to read access transformers from {}", path, e);
-            }
+            logger.warn("Found non-existent access transformers in plugin manifest of {}: {}", path, annotationProcessors);
         }
 
         if (!candidates.isEmpty()) {
@@ -310,7 +293,5 @@ final class PluginScanner {
 
         return null;
     }
-
-
 
 }
