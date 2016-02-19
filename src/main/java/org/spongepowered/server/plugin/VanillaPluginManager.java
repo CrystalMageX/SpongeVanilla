@@ -24,6 +24,7 @@
  */
 package org.spongepowered.server.plugin;
 
+import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 
 import com.google.inject.Singleton;
@@ -33,7 +34,6 @@ import org.spongepowered.api.plugin.PluginContainer;
 import org.spongepowered.api.plugin.PluginManager;
 import org.spongepowered.common.SpongeImpl;
 import org.spongepowered.plugin.meta.PluginMetadata;
-import org.spongepowered.server.launch.VanillaLaunch;
 import org.spongepowered.server.launch.plugin.PluginCandidate;
 import org.spongepowered.server.launch.plugin.VanillaLaunchPluginManager;
 
@@ -78,7 +78,7 @@ public class VanillaPluginManager implements PluginManager {
         List<PluginCandidate> failedCandidates = new ArrayList<>();
 
         for (PluginCandidate candidate : candidates.values()) {
-            if (candidate.collectRequirements(this.plugins.keySet(), candidates)) {
+            if (candidate.collectRequirements(this.plugins, candidates)) {
                 successfulCandidates.add(candidate);
             } else {
                 failedCandidates.add(candidate);
@@ -112,11 +112,40 @@ public class VanillaPluginManager implements PluginManager {
         }
 
         for (PluginCandidate failed : failedCandidates) {
-            VanillaLaunch.getLogger().error("Cannot load plugin '{}' because it is missing the required dependencies {}",
-                    failed.getId(), failed.getMissingRequirements());
+            // TODO: Log source of plugin
+            if (failed.isInvalid()) {
+                SpongeImpl.getLogger().error("Plugin '{}' cannot be loaded because it is invalid", failed.getId());
+            } else {
+                SpongeImpl.getLogger().error("Cannot load plugin '{}' because it is missing the required dependencies {}",
+                        failed.getId(), formatMissingRequirements(failed.getMissingRequirements()));
+            }
         }
 
         return successfulCandidates;
+    }
+
+    private static String formatMissingRequirements(Map<String, String> requirements) {
+        checkArgument(!requirements.isEmpty(), "Requirements cannot be empty");
+
+        StringBuilder builder = new StringBuilder();
+        boolean first = true;
+        for (Map.Entry<String, String> entry : requirements.entrySet()) {
+            if (first) {
+                first = false;
+            } else {
+                builder.append(", ");
+            }
+
+            // Append plugin ID
+            builder.append(entry.getKey());
+
+            final String version = entry.getValue();
+            if (version != null) {
+                builder.append(" (Version ").append(version).append(')');
+            }
+        }
+
+        return builder.toString();
     }
 
     private void loadPlugin(PluginCandidate candidate) {

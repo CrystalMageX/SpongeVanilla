@@ -27,11 +27,15 @@ package org.spongepowered.server.launch.plugin;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
 
-import com.google.common.collect.ImmutableSet;
+import org.spongepowered.api.plugin.PluginContainer;
 import org.spongepowered.plugin.meta.PluginMetadata;
+import org.spongepowered.plugin.meta.version.DefaultArtifactVersion;
+import org.spongepowered.plugin.meta.version.InvalidVersionSpecificationException;
+import org.spongepowered.plugin.meta.version.VersionRange;
+import org.spongepowered.server.launch.VanillaLaunch;
 
 import java.nio.file.Path;
-import java.util.Collection;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.Map;
@@ -48,8 +52,11 @@ public final class PluginCandidate {
 
     private PluginMetadata metadata;
 
+    private boolean invalid;
+
     @Nullable private Set<PluginCandidate> requirements;
-    @Nullable private Set<String> missingRequirements;
+    @Nullable private Map<String, String> versions;
+    @Nullable private Map<String, String> missingRequirements;
 
     PluginCandidate(String pluginClass, @Nullable Path source, PluginMetadata metadata) {
         this.pluginClass = checkNotNull(pluginClass, "pluginClass");
@@ -78,7 +85,15 @@ public final class PluginCandidate {
         this.metadata = checkNotNull(metadata, "metadata");
     }
 
-    public Set<String> getMissingRequirements() {
+    public boolean isInvalid() {
+        return this.invalid;
+    }
+
+    public boolean isLoadable() {
+        return !this.invalid && getMissingRequirements().isEmpty();
+    }
+
+    public Map<String, String> getMissingRequirements() {
         checkState(this.missingRequirements != null, "Requirements not collected yet");
         return this.missingRequirements;
     }
@@ -86,48 +101,139 @@ public final class PluginCandidate {
     public boolean updateRequirements() {
         checkState(this.requirements != null, "Requirements not collected yet");
         if (this.requirements.isEmpty()) {
-            return true;
+            return false;
         }
 
         Iterator<PluginCandidate> itr = this.requirements.iterator();
         while (itr.hasNext()) {
             final PluginCandidate candidate = itr.next();
-            if (!candidate.getMissingRequirements().isEmpty()) {
+            if (!candidate.isLoadable()) {
                 itr.remove();
-                this.missingRequirements.add(candidate.getId());
+                this.missingRequirements.put(candidate.getId(), this.versions.get(candidate.getId()));
             }
         }
 
-        return !this.missingRequirements.isEmpty();
+        return this.invalid || !this.missingRequirements.isEmpty();
     }
 
-    public boolean collectRequirements(Collection<String> loadedPlugins, Map<String, PluginCandidate> candidates) {
+    public boolean collectRequirements(Map<String, PluginContainer> loadedPlugins, Map<String, PluginCandidate> candidates) {
         checkState(this.requirements == null, "Requirements already collected");
 
-        if (this.metadata.getRequiredDependencies().isEmpty()) {
-            this.requirements = ImmutableSet.of();
-            this.missingRequirements = ImmutableSet.of();
-            return true;
+        if (loadedPlugins.containsKey(this.id)) {
+            this.invalid = true;
         }
 
         this.requirements = new HashSet<>();
-        this.missingRequirements = new HashSet<>();
+        this.versions = new HashMap<>();
+        this.missingRequirements = new HashMap<>();
 
         for (PluginMetadata.Dependency dependency : this.metadata.getRequiredDependencies()) {
             final String id = dependency.getId();
-            if (id.equals(this.id) || loadedPlugins.contains(id)) {
+            if (this.id.equals(id)) {
+                continue; // TODO
+            }
+
+            final String version = dependency.getVersion();
+
+            PluginContainer loaded = loadedPlugins.get(id);
+            if (loaded != null) {
+                if (!verifyVersionRange(id, version, loaded.getVersion().orElse(null), true)) {
+                    this.missingRequirements.put(id, version);
+                }
+
                 continue;
             }
 
             PluginCandidate candidate = candidates.get(id);
-            if (candidate != null) {
+            if (candidate != null && verifyVersionRange(id, version, candidate.getMetadata().getVersion(), true)) {
                 this.requirements.add(candidate);
-            } else {
-                this.missingRequirements.add(id);
+                continue;
+            }
+
+            this.missingRequirements.put(id, version);
+        }
+
+        collectOptionalDependencies(this.metadata.getLoadAfter(), loadedPlugins, candidates, true);
+        collectOptionalDependencies(this.metadata.getLoadBefore(), loadedPlugins, candidates, false);
+
+        return isLoadable();
+    }
+
+    private void collectOptionalDependencies(Iterable<PluginMetadata.Dependency> dependencies,
+            Map<String, PluginContainer> loadedPlugins, Map<String, PluginCandidate> candidates, boolean allowLoaded) {
+        for (PluginMetadata.Dependency dependency : dependencies) {
+            final String id = dependency.getId();
+            if (this.id.equals(id)) {
+                continue; // TODO
+            }
+
+            final String version = dependency.getVersion();
+
+            PluginContainer loaded = loadedPlugins.get(id);
+            if (loaded != null) {
+                if (allowLoaded) {
+                    if (!verifyVersionRange(id, version, loaded.getVersion().orElse(null), false)) {
+                        this.missingRequirements.put(id, version);
+                    }
+                } else {
+                    VanillaLaunch.getLogger().error("Cannot have before dependency on loaded plugin '{}' from plugin '{}'", id, this.id);
+                    this.invalid = true;
+                }
+
+                continue;
+            }
+
+            PluginCandidate candidate = candidates.get(id);
+            if (candidate != null && !verifyVersionRange(id, version, candidate.getMetadata().getVersion(), false)) {
+                this.missingRequirements.put(id, version);
+            }
+        }
+    }
+
+    private boolean verifyVersionRange(String id, @Nullable String expectedRange, @Nullable String version, boolean store) {
+        if (expectedRange == null) {
+            return true;
+        }
+
+        if (version != null) {
+            try {
+                VersionRange range = VersionRange.createFromVersionSpec(expectedRange);
+                if (range.containsVersion(new DefaultArtifactVersion(version))) {
+                    if (store) {
+                        String currentRange = this.versions.get(id);
+                        if (currentRange != null) {
+                            if (currentRange.equals(expectedRange)) {
+                                return true;
+                            }
+
+                            // This should almost never happen because it means the plugin is
+                            // depending on two different versions of another plugin
+
+                            // We need to merge the ranges
+                            VersionRange otherRange;
+                            try {
+                                otherRange = VersionRange.createFromVersionSpec(currentRange);
+                            } catch (InvalidVersionSpecificationException e) {
+                                throw new AssertionError(e); // Should never happen because we already parsed it once
+                            }
+
+                            expectedRange = otherRange.restrict(range).toString();
+                        }
+
+                        this.versions.put(id, expectedRange);
+                    }
+
+                    return true;
+                }
+            } catch (InvalidVersionSpecificationException e) {
+                // TODO: Log plugin source
+                VanillaLaunch.getLogger().error("Failed to parse version range {} for dependency {} of plugin {}: {}",
+                        version, id, this.id, e.getMessage());
+                this.invalid = true;
             }
         }
 
-        return this.missingRequirements.isEmpty();
+        return false;
     }
 
     @Override
