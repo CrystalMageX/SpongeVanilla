@@ -54,6 +54,7 @@ public final class PluginCandidate {
 
     private boolean invalid;
 
+    @Nullable private Set<PluginCandidate> dependencies;
     @Nullable private Set<PluginCandidate> requirements;
     @Nullable private Map<String, String> versions;
     @Nullable private Map<String, String> missingRequirements;
@@ -93,6 +94,11 @@ public final class PluginCandidate {
         return !this.invalid && getMissingRequirements().isEmpty();
     }
 
+    public Set<PluginCandidate> getDependencies() {
+        checkState(this.dependencies != null, "Dependencies not collected yet");
+        return this.dependencies;
+    }
+
     public Map<String, String> getMissingRequirements() {
         checkState(this.missingRequirements != null, "Requirements not collected yet");
         return this.missingRequirements;
@@ -116,13 +122,14 @@ public final class PluginCandidate {
         return this.invalid || !this.missingRequirements.isEmpty();
     }
 
-    public boolean collectRequirements(Map<String, PluginContainer> loadedPlugins, Map<String, PluginCandidate> candidates) {
+    public boolean collectDependencies(Map<String, PluginContainer> loadedPlugins, Map<String, PluginCandidate> candidates) {
         checkState(this.requirements == null, "Requirements already collected");
 
         if (loadedPlugins.containsKey(this.id)) {
             this.invalid = true;
         }
 
+        this.dependencies = new HashSet<>();
         this.requirements = new HashSet<>();
         this.versions = new HashMap<>();
         this.missingRequirements = new HashMap<>();
@@ -153,14 +160,22 @@ public final class PluginCandidate {
             this.missingRequirements.put(id, version);
         }
 
-        collectOptionalDependencies(this.metadata.getLoadAfter(), loadedPlugins, candidates, true);
-        collectOptionalDependencies(this.metadata.getLoadBefore(), loadedPlugins, candidates, false);
+        collectOptionalDependencies(this.metadata.getLoadAfter(), loadedPlugins, candidates);
+
+        // TODO: Load before dependencies
+        //collectOptionalDependencies(this.metadata.getLoadBefore(), loadedPlugins, candidates, false);
+
+        if (!this.metadata.getLoadBefore().isEmpty()) {
+            this.invalid = true;
+            VanillaLaunch.getLogger().error("Invalid dependency with load order BEFORE on plugin '{}'. This is currently not supported on Sponge",
+                    this.id);
+        }
 
         return isLoadable();
     }
 
     private void collectOptionalDependencies(Iterable<PluginMetadata.Dependency> dependencies,
-            Map<String, PluginContainer> loadedPlugins, Map<String, PluginCandidate> candidates, boolean allowLoaded) {
+            Map<String, PluginContainer> loadedPlugins, Map<String, PluginCandidate> candidates) {
         for (PluginMetadata.Dependency dependency : dependencies) {
             final String id = dependency.getId();
             if (this.id.equals(id)) {
@@ -171,21 +186,26 @@ public final class PluginCandidate {
 
             PluginContainer loaded = loadedPlugins.get(id);
             if (loaded != null) {
-                if (allowLoaded) {
-                    if (!verifyVersionRange(id, version, loaded.getVersion().orElse(null), false)) {
-                        this.missingRequirements.put(id, version);
-                    }
-                } else {
+                if (!verifyVersionRange(id, version, loaded.getVersion().orElse(null), false)) {
+                    this.missingRequirements.put(id, version);
+                }
+
+                //if (allowLoaded) {
+                /*} else {
                     VanillaLaunch.getLogger().error("Cannot have before dependency on loaded plugin '{}' from plugin '{}'", id, this.id);
                     this.invalid = true;
-                }
+                }*/
 
                 continue;
             }
 
             PluginCandidate candidate = candidates.get(id);
-            if (candidate != null && !verifyVersionRange(id, version, candidate.getMetadata().getVersion(), false)) {
-                this.missingRequirements.put(id, version);
+            if (candidate != null) {
+                if (verifyVersionRange(id, version, candidate.getMetadata().getVersion(), false)) {
+                    this.dependencies.add(candidate);
+                } else {
+                    this.missingRequirements.put(id, version);
+                }
             }
         }
     }

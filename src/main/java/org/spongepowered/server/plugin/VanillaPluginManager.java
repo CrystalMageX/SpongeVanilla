@@ -67,7 +67,9 @@ public class VanillaPluginManager implements PluginManager {
             registerPlugin(container);
         }
 
-        Set<PluginCandidate> candidates = checkRequirements(VanillaLaunchPluginManager.getPlugins());
+        Collection<PluginCandidate> candidates = checkRequirements(VanillaLaunchPluginManager.getPlugins());
+        candidates = PluginSorter.sort(candidates);
+
         for (PluginCandidate candidate : candidates) {
             loadPlugin(candidate);
         }
@@ -78,7 +80,7 @@ public class VanillaPluginManager implements PluginManager {
         List<PluginCandidate> failedCandidates = new ArrayList<>();
 
         for (PluginCandidate candidate : candidates.values()) {
-            if (candidate.collectRequirements(this.plugins, candidates)) {
+            if (candidate.collectDependencies(this.plugins, candidates)) {
                 successfulCandidates.add(candidate);
             } else {
                 failedCandidates.add(candidate);
