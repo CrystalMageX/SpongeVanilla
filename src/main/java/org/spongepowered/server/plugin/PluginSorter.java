@@ -30,12 +30,12 @@ import org.spongepowered.server.launch.plugin.PluginCandidate;
 
 import java.util.List;
 
-public final class PluginSorter {
+final class PluginSorter {
 
     private PluginSorter() {
     }
 
-    public static List<PluginCandidate> sort(Iterable<PluginCandidate> candidates) {
+    static List<PluginCandidate> sort(Iterable<PluginCandidate> candidates) {
         DirectedGraph<PluginCandidate> graph = new DirectedGraph<>();
 
         for (PluginCandidate candidate : candidates) {

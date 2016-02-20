@@ -31,7 +31,7 @@ import java.util.HashSet;
 import java.util.Set;
 import java.util.jar.Manifest;
 
-public final class PluginAccessTransformers {
+final class PluginAccessTransformers {
 
     private static final String KEY = "FMLAT";
     private static final Splitter VALUE_SPLITTER = Splitter.on(' ').trimResults().omitEmptyStrings();
@@ -40,7 +40,7 @@ public final class PluginAccessTransformers {
     private PluginAccessTransformers() {
     }
 
-    public static Set<String> find(Manifest manifest) {
+    static Set<String> find(Manifest manifest) {
         String ats = manifest.getMainAttributes().getValue(KEY);
         if (ats == null) {
             return Collections.emptySet();

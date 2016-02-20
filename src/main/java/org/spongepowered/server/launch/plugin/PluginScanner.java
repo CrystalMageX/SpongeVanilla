@@ -24,6 +24,8 @@
  */
 package org.spongepowered.server.launch.plugin;
 
+import static java.util.stream.Collectors.joining;
+
 import com.google.common.collect.ImmutableSet;
 import org.apache.logging.log4j.Logger;
 import org.objectweb.asm.ClassReader;
@@ -54,6 +56,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -239,7 +242,10 @@ final class PluginScanner {
             logger.warn("Found non-existent access transformers in plugin manifest of {}: {}", path, annotationProcessors);
         }
 
-        if (!candidates.isEmpty()) {
+        if (candidates.isEmpty()) {
+            logger.error("No valid plugins found in {}. Is the file actually a plugin JAR? Please keep in mind Forge mods can be only loaded on "
+                    + "SpongeForge servers, SpongeVanilla supports only Sponge plugins.", path);
+        } else {
             for (PluginCandidate candidate : candidates) {
                 if (!addCandidate(candidate)) {
                     continue;
@@ -247,17 +253,26 @@ final class PluginScanner {
 
                 // Find matching plugin metadata
                 if (metadata != null) {
+                    Iterator<PluginMetadata> itr = metadata.iterator();
                     for (PluginMetadata meta : metadata) {
                         if (candidate.getId().equals(meta.getId())) {
                             candidate.setMetadata(meta);
+                            itr.remove();
                             break;
                         }
                     }
 
-                    logger.warn("No matching file metadata found for plugin {} from {}", candidate.getId(), path);
+                    logger.warn("No matching metadata found for plugin {} in " + METADATA_FILE + " from {}", candidate.getId(), path);
                 }
+            }
 
-                // TODO: Warn about unused metadata
+            if (metadata == null) {
+                logger.warn("{} is missing a valid " + METADATA_FILE + ". This is not a problem when testing plugins, however it is recommended"
+                        + " to include one in public plugins. Please see the in-existent SpongeDocs link for details.", path); // TODO
+            } else if (!metadata.isEmpty()) {
+                logger.warn("Found {} plugins in " + METADATA_FILE + " which were not found in the plugin JAR. Are the plugin classes actually "
+                        + "included? Affected plugin IDs: {}",
+                        metadata.size(), metadata.stream().map(PluginMetadata::getId).collect(joining(", ")));
             }
         }
     }
