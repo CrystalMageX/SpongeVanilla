@@ -27,6 +27,7 @@ package org.spongepowered.server.launch.plugin;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
 
+import com.google.common.base.Objects;
 import org.spongepowered.api.plugin.PluginContainer;
 import org.spongepowered.plugin.meta.PluginMetadata;
 import org.spongepowered.plugin.meta.version.DefaultArtifactVersion;
@@ -78,6 +79,14 @@ public final class PluginCandidate {
         return this.source;
     }
 
+    public String getDisplaySource() {
+        if (this.source.isPresent()) {
+            return this.source.toString();
+        }
+
+        return "unknown";
+    }
+
     public PluginMetadata getMetadata() {
         return this.metadata;
     }
@@ -94,18 +103,36 @@ public final class PluginCandidate {
         return !this.invalid && getMissingRequirements().isEmpty();
     }
 
+    public boolean dependenciesCollected() {
+        return this.dependencies != null;
+    }
+
+    private void ensureState() {
+        checkState(dependenciesCollected(), "Dependencies not collected yet");
+    }
+
     public Set<PluginCandidate> getDependencies() {
-        checkState(this.dependencies != null, "Dependencies not collected yet");
+        ensureState();
         return this.dependencies;
     }
 
+    public Set<PluginCandidate> getRequirements() {
+        ensureState();
+        return this.requirements;
+    }
+
     public Map<String, String> getMissingRequirements() {
-        checkState(this.missingRequirements != null, "Requirements not collected yet");
+        ensureState();
         return this.missingRequirements;
     }
 
+    public String getVersion(String id) {
+        ensureState();
+        return this.versions.get(id);
+    }
+
     public boolean updateRequirements() {
-        checkState(this.requirements != null, "Requirements not collected yet");
+        ensureState();
         if (this.requirements.isEmpty()) {
             return false;
         }
@@ -123,7 +150,7 @@ public final class PluginCandidate {
     }
 
     public boolean collectDependencies(Map<String, PluginContainer> loadedPlugins, Map<String, PluginCandidate> candidates) {
-        checkState(this.requirements == null, "Requirements already collected");
+        checkState(this.dependencies == null, "Dependencies already collected");
 
         if (loadedPlugins.containsKey(this.id)) {
             this.invalid = true;
@@ -137,14 +164,16 @@ public final class PluginCandidate {
         for (PluginMetadata.Dependency dependency : this.metadata.getRequiredDependencies()) {
             final String id = dependency.getId();
             if (this.id.equals(id)) {
-                continue; // TODO
+                VanillaLaunch.getLogger().warn("Plugin '{}' from {} requires itself to be loaded. "
+                        + "This is redundant and can be removed from the dependencies.", this.id, getDisplaySource());
+                continue;
             }
 
             final String version = dependency.getVersion();
 
             PluginContainer loaded = loadedPlugins.get(id);
             if (loaded != null) {
-                if (!verifyVersionRange(id, version, loaded.getVersion().orElse(null), true)) {
+                if (!verifyVersionRange(id, version, loaded.getVersion().orElse(null))) {
                     this.missingRequirements.put(id, version);
                 }
 
@@ -152,7 +181,7 @@ public final class PluginCandidate {
             }
 
             PluginCandidate candidate = candidates.get(id);
-            if (candidate != null && verifyVersionRange(id, version, candidate.getMetadata().getVersion(), true)) {
+            if (candidate != null && verifyVersionRange(id, version, candidate.getMetadata().getVersion())) {
                 this.requirements.add(candidate);
                 continue;
             }
@@ -167,8 +196,8 @@ public final class PluginCandidate {
 
         if (!this.metadata.getLoadBefore().isEmpty()) {
             this.invalid = true;
-            VanillaLaunch.getLogger().error("Invalid dependency with load order BEFORE on plugin '{}'. This is currently not supported on Sponge",
-                    this.id);
+            VanillaLaunch.getLogger().error("Invalid dependency with load order BEFORE on plugin '{}' from {}. "
+                    + "This is currently not supported on Sponge!", this.id, getDisplaySource());
         }
 
         return isLoadable();
@@ -179,14 +208,17 @@ public final class PluginCandidate {
         for (PluginMetadata.Dependency dependency : dependencies) {
             final String id = dependency.getId();
             if (this.id.equals(id)) {
-                continue; // TODO
+                VanillaLaunch.getLogger().error("Plugin '{}' from {} cannot have a dependency on itself. This is redundant and should be "
+                        + "removed.", this.id, getDisplaySource());
+                this.invalid = true;
+                continue;
             }
 
             final String version = dependency.getVersion();
 
             PluginContainer loaded = loadedPlugins.get(id);
             if (loaded != null) {
-                if (!verifyVersionRange(id, version, loaded.getVersion().orElse(null), false)) {
+                if (!verifyVersionRange(id, version, loaded.getVersion().orElse(null))) {
                     this.missingRequirements.put(id, version);
                 }
 
@@ -201,7 +233,7 @@ public final class PluginCandidate {
 
             PluginCandidate candidate = candidates.get(id);
             if (candidate != null) {
-                if (verifyVersionRange(id, version, candidate.getMetadata().getVersion(), false)) {
+                if (verifyVersionRange(id, version, candidate.getMetadata().getVersion())) {
                     this.dependencies.add(candidate);
                 } else {
                     this.missingRequirements.put(id, version);
@@ -210,7 +242,7 @@ public final class PluginCandidate {
         }
     }
 
-    private boolean verifyVersionRange(String id, @Nullable String expectedRange, @Nullable String version, boolean store) {
+    private boolean verifyVersionRange(String id, @Nullable String expectedRange, @Nullable String version) {
         if (expectedRange == null) {
             return true;
         }
@@ -219,36 +251,33 @@ public final class PluginCandidate {
             try {
                 VersionRange range = VersionRange.createFromVersionSpec(expectedRange);
                 if (range.containsVersion(new DefaultArtifactVersion(version))) {
-                    if (store) {
-                        String currentRange = this.versions.get(id);
-                        if (currentRange != null) {
-                            if (currentRange.equals(expectedRange)) {
-                                return true;
-                            }
-
-                            // This should almost never happen because it means the plugin is
-                            // depending on two different versions of another plugin
-
-                            // We need to merge the ranges
-                            VersionRange otherRange;
-                            try {
-                                otherRange = VersionRange.createFromVersionSpec(currentRange);
-                            } catch (InvalidVersionSpecificationException e) {
-                                throw new AssertionError(e); // Should never happen because we already parsed it once
-                            }
-
-                            expectedRange = otherRange.restrict(range).toString();
+                    String currentRange = this.versions.get(id);
+                    if (currentRange != null) {
+                        if (currentRange.equals(expectedRange)) {
+                            return true;
                         }
 
-                        this.versions.put(id, expectedRange);
+                        // This should almost never happen because it means the plugin is
+                        // depending on two different versions of another plugin
+
+                        // We need to merge the ranges
+                        VersionRange otherRange;
+                        try {
+                            otherRange = VersionRange.createFromVersionSpec(currentRange);
+                        } catch (InvalidVersionSpecificationException e) {
+                            throw new AssertionError(e); // Should never happen because we already parsed it once
+                        }
+
+                        expectedRange = otherRange.restrict(range).toString();
                     }
+
+                    this.versions.put(id, expectedRange);
 
                     return true;
                 }
             } catch (InvalidVersionSpecificationException e) {
-                // TODO: Log plugin source
-                VanillaLaunch.getLogger().error("Failed to parse version range {} for dependency {} of plugin {}: {}",
-                        version, id, this.id, e.getMessage());
+                VanillaLaunch.getLogger().error("Failed to parse version range {} for dependency {} of plugin {} from {}: {}",
+                        version, id, this.id, getDisplaySource(), e.getMessage());
                 this.invalid = true;
             }
         }
@@ -273,6 +302,22 @@ public final class PluginCandidate {
     @Override
     public int hashCode() {
         return this.id.hashCode();
+    }
+
+    @Override
+    public String toString() {
+        Objects.ToStringHelper helper = Objects.toStringHelper(this)
+                .omitNullValues()
+                .add("id", this.id)
+                .add("class", this.pluginClass)
+                .add("source", this.source.orElse(null));
+        if (this.invalid) {
+            helper.addValue("INVALID");
+        } else if (this.missingRequirements != null && !this.missingRequirements.isEmpty()) {
+            helper.addValue("FAILED");
+        }
+
+        return helper.toString();
     }
 
 }

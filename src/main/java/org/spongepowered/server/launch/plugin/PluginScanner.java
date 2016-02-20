@@ -25,6 +25,7 @@
 package org.spongepowered.server.launch.plugin;
 
 import static java.util.stream.Collectors.joining;
+import static org.spongepowered.api.plugin.Plugin.ID_PATTERN;
 
 import com.google.common.collect.ImmutableSet;
 import org.apache.logging.log4j.Logger;
@@ -242,10 +243,7 @@ final class PluginScanner {
             logger.warn("Found non-existent access transformers in plugin manifest of {}: {}", path, annotationProcessors);
         }
 
-        if (candidates.isEmpty()) {
-            logger.error("No valid plugins found in {}. Is the file actually a plugin JAR? Please keep in mind Forge mods can be only loaded on "
-                    + "SpongeForge servers, SpongeVanilla supports only Sponge plugins.", path);
-        } else {
+        if (!candidates.isEmpty()) {
             for (PluginCandidate candidate : candidates) {
                 if (!addCandidate(candidate)) {
                     continue;
@@ -271,9 +269,12 @@ final class PluginScanner {
                         + " to include one in public plugins. Please see the in-existent SpongeDocs link for details.", path); // TODO
             } else if (!metadata.isEmpty()) {
                 logger.warn("Found {} plugins in " + METADATA_FILE + " which were not found in the plugin JAR. Are the plugin classes actually "
-                        + "included? Affected plugin IDs: {}",
-                        metadata.size(), metadata.stream().map(PluginMetadata::getId).collect(joining(", ")));
+                                + "included? Affected plugins: {} from {}",
+                        metadata.size(), metadata.stream().map(PluginMetadata::getId).collect(joining(", ")), path);
             }
+        } else if (!classpath) {
+            logger.error("No valid plugins found in {}. Is the file actually a plugin JAR? Please keep in mind Forge mods can be only loaded on "
+                    + "SpongeForge servers, SpongeVanilla supports only Sponge plugins.", path);
         }
     }
 
@@ -281,18 +282,22 @@ final class PluginScanner {
         final String pluginClass = candidate.getPluginClass();
         final String id = candidate.getId();
 
-        // TODO: Validate ID
+        if (!ID_PATTERN.matcher(id).matches()) {
+            logger.error("Skipping plugin with invalid plugin id '{}' from {}. The plugin id should match pattern {}",
+                    id, candidate.getDisplaySource(), ID_PATTERN);
+            return false;
+        }
 
         if (this.pluginClasses.add(pluginClass)) {
             if (this.plugins.containsKey(id)) {
-                logger.warn("Skipping plugin with duplicate plugin id '{}' ({} from {})", id, pluginClass, candidate.getSource());
+                logger.error("Skipping plugin with duplicate plugin id '{}' from {}", id, candidate.getDisplaySource());
                 return false;
             }
 
             this.plugins.put(id, candidate);
             return true;
         } else {
-            logger.warn("Skipping duplicate plugin class {} from {}", pluginClass, candidate.getSource());
+            logger.error("Skipping duplicate plugin class {} from {}", pluginClass, candidate.getDisplaySource());
         }
 
         return false;
@@ -312,7 +317,7 @@ final class PluginScanner {
 
             return new PluginCandidate(visitor.getClassName().replace('/', '.'), source, metadata);
         } catch (InvalidPluginException e) {
-            logger.warn("Skipping invalid plugin {} from {}: {}", visitor.getClassName(), source, e.getMessage());
+            logger.error("Skipping invalid plugin {} from {}: {}", visitor.getClassName(), source, e.getMessage());
         }
 
         return null;
